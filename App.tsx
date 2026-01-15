@@ -124,13 +124,22 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Save history on change
+  // Save history on change with quota handling
   useEffect(() => {
-    try {
-      localStorage.setItem('audit_history', JSON.stringify(history));
-    } catch (e) {
-      console.error("Failed to save history", e);
-    }
+    const saveToStorage = (items: HistoryItem[]) => {
+      try {
+        localStorage.setItem('audit_history', JSON.stringify(items));
+      } catch (e) {
+        // If quota exceeded, try removing the oldest item (last in array) and retry
+        if (items.length > 0) {
+           console.warn("Storage quota exceeded, trimming history to fit...");
+           saveToStorage(items.slice(0, items.length - 1));
+        } else {
+           console.error("Failed to save history: Storage full.");
+        }
+      }
+    };
+    saveToStorage(history);
   }, [history]);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -170,7 +179,8 @@ const App: React.FC = () => {
 
       setHistory(prev => {
         const updated = [newItem, ...prev];
-        return updated.slice(0, 10);
+        // Limit to 5 items to prevent LocalStorage quota exceeded errors
+        return updated.slice(0, 5); 
       });
       setSelectedHistoryId(newItem.id);
 
@@ -218,7 +228,7 @@ const App: React.FC = () => {
   };
 
   // Get current category label safely
-  const currentCategoryLabel = t[DESIGN_CATEGORIES.find(c => c.id === selectedCategory)?.labelKey as keyof typeof t] || selectedCategory;
+  const currentCategoryLabel = (t[DESIGN_CATEGORIES.find(c => c.id === selectedCategory)?.labelKey as keyof typeof t] || selectedCategory) as string;
 
   return (
     <div className="flex h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 overflow-hidden font-sans transition-colors duration-300">
@@ -481,7 +491,7 @@ const App: React.FC = () => {
                 <div className="animate-in fade-in slide-in-from-top-4 duration-500">
                   <div className="flex items-center justify-between mb-3 px-1">
                     <h2 className="text-lg font-bold tracking-tight">{t.select_category}</h2>
-                    <span className="text-xs text-slate-500 dark:text-slate-400">{t.current_perspective}: <span className="font-bold text-indigo-600 dark:text-indigo-400">{t[DESIGN_CATEGORIES.find(c => c.id === selectedCategory)?.labelKey as keyof typeof t]}</span></span>
+                    <span className="text-xs text-slate-500 dark:text-slate-400">{t.current_perspective}: <span className="font-bold text-indigo-600 dark:text-indigo-400">{t[DESIGN_CATEGORIES.find(c => c.id === selectedCategory)?.labelKey as keyof typeof t] as string}</span></span>
                   </div>
                   <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
                     {DESIGN_CATEGORIES.map(category => (
@@ -497,7 +507,7 @@ const App: React.FC = () => {
                       >
                         <span className="text-xl">{category.icon}</span>
                         <span className={`text-sm font-medium ${selectedCategory === category.id ? 'text-white' : 'text-slate-700 dark:text-slate-200'}`}>
-                          {t[category.labelKey as keyof typeof t]}
+                          {t[category.labelKey as keyof typeof t] as string}
                         </span>
                       </button>
                     ))}
@@ -531,10 +541,10 @@ const App: React.FC = () => {
                         </svg>
                       </div>
                       <h3 className="text-xl font-bold text-slate-800 dark:text-white mb-2">
-                        {(t.upload_category_hint as Function)(currentCategoryLabel)}
+                        {(t.upload_category_hint as (cat: string) => string)(currentCategoryLabel)}
                       </h3>
                       <p className="text-slate-500 dark:text-slate-400 text-sm max-w-xs mx-auto leading-relaxed">
-                        {(t.ai_lens_hint as Function)(currentCategoryLabel)}
+                        {(t.ai_lens_hint as (cat: string) => string)(currentCategoryLabel)}
                       </p>
                     </div>
                   )}
@@ -596,7 +606,7 @@ const App: React.FC = () => {
                            <span className="text-2xl">{DESIGN_CATEGORIES.find(c => c.labelKey === report.audit_perspective || c.id === selectedCategory)?.icon || '👁️'}</span>
                            <div>
                              <p className="text-xs text-indigo-500 dark:text-indigo-400 font-bold uppercase tracking-wide">{t.current_perspective}</p>
-                             <p className="text-indigo-900 dark:text-indigo-100 font-medium">{t[DESIGN_CATEGORIES.find(c => c.id === (report.audit_perspective || selectedCategory))?.labelKey as keyof typeof t] || report.audit_perspective}</p>
+                             <p className="text-indigo-900 dark:text-indigo-100 font-medium">{t[DESIGN_CATEGORIES.find(c => c.id === (report.audit_perspective || selectedCategory))?.labelKey as keyof typeof t] as string || report.audit_perspective}</p>
                            </div>
                         </div>
                       )}
