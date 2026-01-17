@@ -2,7 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { analyzeUI } from './services/geminiService';
 import { AuditReport, AuditType, HistoryItem } from './types';
-import { fileToBase64, createThumbnail } from './utils/imageUtils';
+import { processImageForApi, createThumbnail } from './utils/imageUtils';
 import { saveImageToDB, getImageFromDB, clearImageDB, deleteImageFromDB } from './utils/db';
 import AuditCard from './components/AuditCard';
 import DonateModal from './components/DonateModal';
@@ -145,6 +145,7 @@ const App: React.FC = () => {
     const file = event.target.files?.[0];
     if (!file) return;
 
+    // Show preview immediately using FileReader for better UX
     const reader = new FileReader();
     reader.onloadend = () => {
       const previewUrl = reader.result as string;
@@ -156,7 +157,7 @@ const App: React.FC = () => {
     event.target.value = '';
   };
 
-  const processFile = async (file: File, previewUrl: string) => {
+  const processFile = async (file: File, originalPreviewUrl: string) => {
     setReport(null);
     setError(null);
     setLoading(true);
@@ -164,23 +165,21 @@ const App: React.FC = () => {
     if (window.innerWidth < 1024) setIsSidebarOpen(false);
 
     try {
-      // 1. Convert file to Base64 for API
-      const base64Data = await fileToBase64(file);
+      // 1. Compress and resize image for API performance
+      // This is crucial to prevent timeouts with large screenshots
+      const { base64, mimeType } = await processImageForApi(file);
       
       // 2. Call Gemini API
-      const auditResult = await analyzeUI(base64Data, file.type, selectedCategory, currentLang);
+      const auditResult = await analyzeUI(base64, mimeType, selectedCategory, currentLang);
       
       // 3. Create a unique ID
       const newId = Date.now().toString();
       
       // 4. Generate a small thumbnail for the sidebar (saves LocalStorage space)
-      const thumbnailUrl = await createThumbnail(previewUrl, 80);
+      const thumbnailUrl = await createThumbnail(originalPreviewUrl, 80);
 
-      // 5. Save the FULL image to IndexedDB (for reloading later)
-      // Note: We remove the 'data:image/png;base64,' prefix inside saveImageToDB if passed raw, 
-      // but here we pass the base64Data which is already clean from fileToBase64
-      // We'll store it with prefix to make retrieval easier for <img src>
-      await saveImageToDB(newId, previewUrl);
+      // 5. Save the FULL original image to IndexedDB (for reloading later)
+      await saveImageToDB(newId, originalPreviewUrl);
 
       setReport(auditResult);
       
@@ -206,7 +205,8 @@ const App: React.FC = () => {
       setSelectedHistoryId(newItem.id);
 
     } catch (err: any) {
-      setError(err.message || "Audit Failed.");
+      console.error(err);
+      setError(err.message || "Audit Failed. Please try again.");
     } finally {
       setLoading(false);
     }

@@ -5,11 +5,65 @@ export const fileToBase64 = (file: File): Promise<string> => {
     reader.readAsDataURL(file);
     reader.onload = () => {
       const base64String = reader.result as string;
-      // Remove the data URL prefix (e.g., "data:image/png;base64,")
       const base64Data = base64String.split(',')[1];
       resolve(base64Data);
     };
     reader.onerror = (error) => reject(error);
+  });
+};
+
+/**
+ * Compresses and resizes an image file for API optimization.
+ * Resizes large images to max 1536px dimension and converts to JPEG (0.8 quality).
+ */
+export const processImageForApi = (file: File): Promise<{ base64: string, mimeType: string }> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+        const MAX_SIZE = 1536; // Optimal size for Gemini Vision
+
+        // Calculate new dimensions while maintaining aspect ratio
+        if (width > height) {
+          if (width > MAX_SIZE) {
+            height *= MAX_SIZE / width;
+            width = MAX_SIZE;
+          }
+        } else {
+          if (height > MAX_SIZE) {
+            width *= MAX_SIZE / height;
+            height = MAX_SIZE;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        
+        if (!ctx) {
+          reject(new Error("Could not get canvas context"));
+          return;
+        }
+
+        // Fill white background for transparent PNGs
+        ctx.fillStyle = "#FFFFFF";
+        ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        // Convert to JPEG with 0.8 quality
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+        const base64 = dataUrl.split(',')[1];
+        resolve({ base64, mimeType: 'image/jpeg' });
+      };
+      img.onerror = (err) => reject(new Error("Failed to load image"));
+    };
+    reader.onerror = (err) => reject(new Error("Failed to read file"));
   });
 };
 

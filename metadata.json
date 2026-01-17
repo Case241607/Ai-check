@@ -1,6 +1,6 @@
 {
   "name": "AI UI/UX 审计师",
-  "description": "基于 Gemini 3 Flash 的专业 AI UI/UX 设计审计工具，为您的 App 或网页截图提供即时的专家级反馈。",
+  "description": "基于 Gemini 3 Pro 的专业 AI UI/UX 设计审计工具，为您的 App 或网页截图提供即时的专家级反馈。",
   "requestFramePermissions": [
     "camera"
   ]

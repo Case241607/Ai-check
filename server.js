@@ -89,26 +89,32 @@ Return a JSON object with this exact structure:
 
 // API endpoint for UI analysis  
 app.post('/api/analyze', async (req, res) => {  
+  const startTime = Date.now();
+  console.log(`[${new Date().toISOString()}] 📨 Received analysis request`);
+  
   try {  
     const { imageBase64, mimeType, category, language } = req.body;  
     
-    // Validate inputs  
+    // 1. Check Input
     if (!imageBase64 || !mimeType || !category) {  
+      console.warn('⚠️ Request missing fields');
       return res.status(400).json({  
         error: 'Missing required fields: imageBase64, mimeType, category'  
       });  
     }  
 
-    // Get API key from environment  
+    // 2. Check API Key specifically for this request
     const apiKey = process.env.API_KEY;  
     if (!apiKey) {  
-      console.error('API_KEY not found in environment variables');  
+      console.error('❌ CRITICAL ERROR: API_KEY is missing in environment during request processing!');  
       return res.status(500).json({  
         error: language === 'zh'  
-          ? '服务器未配置 API Key。请在 Zeabur 环境变量中设置 API_KEY。'  
-          : 'Server API Key not configured. Please set API_KEY in environment variables.'  
+          ? '服务器配置错误：未找到 API Key。请在部署平台检查环境变量。'  
+          : 'Server Configuration Error: API_KEY missing. Please check deployment settings.'  
       });  
     }  
+
+    console.log(`🔑 API Key check passed (Length: ${apiKey.length})`);
 
     // Initialize Gemini AI  
     const ai = new GoogleGenAI({ apiKey });  
@@ -123,10 +129,12 @@ app.post('/api/analyze', async (req, res) => {
     };  
     const targetLang = langMap[language] || 'Simplified Chinese';  
     
-    // Call Gemini API  
-    // Using gemini-2.0-flash as requested in server code
+    console.log(`🤖 Calling Gemini Model: gemini-3-pro-preview`);
+    console.log(`📝 Parameters: Category=[${category}], Language=[${targetLang}]`);
+
+    // Call Gemini API
     const response = await ai.models.generateContent({  
-      model: 'gemini-2.0-flash',  
+      model: 'gemini-3-pro-preview',  
       contents: {  
         parts: [  
           {  
@@ -187,9 +195,14 @@ app.post('/api/analyze', async (req, res) => {
     });  
 
     const text = response.text;  
+    
+    const duration = (Date.now() - startTime) / 1000;
+    console.log(`✅ Gemini response received successfully in ${duration}s`);
+
     if (!text) {  
+      console.error('⚠️ Gemini returned empty response text');
       return res.status(500).json({  
-        error: language === 'zh' ? 'AI 响应为空' : 'AI response is empty'  
+        error: language === 'zh' ? 'AI 响应内容为空' : 'AI response is empty'  
       });  
     }  
 
@@ -197,24 +210,33 @@ app.post('/api/analyze', async (req, res) => {
     res.json(result);  
 
   } catch (error) {  
-    console.error('API Error:', error);  
+    console.error('❌ API Processing Error:', error);  
     let errorMessage = 'Analysis failed';  
     
+    // Enhanced error mapping for debugging
     if (error.message?.includes('403')) {  
+      console.error('🔑 403 Forbidden: Check if API Key is valid and has access to gemini-3-pro-preview');
       errorMessage = req.body.language === 'zh'  
-        ? 'API 调用被拒绝 (403)。请检查 API Key 是否有效。'  
-        : 'API request forbidden (403). Please check your API Key.';  
+        ? 'API 权限验证失败 (403)。请检查 API Key 是否有效，以及是否开通了相关模型权限。'  
+        : 'API Forbidden (403). Check if API Key is valid and has access to the model.';  
     } else if (error.message?.includes('400')) {  
+      console.error('📉 400 Bad Request: Image might be malformed or prompt issues');
       errorMessage = req.body.language === 'zh'  
-        ? '请求无效 (400)。API Key 可能无效。'  
-        : 'Invalid request (400). Your API Key might be invalid.';  
+        ? '请求被拒绝 (400)。可能是图片格式问题或 API Key 无效。'  
+        : 'Invalid request (400). Check image format or API Key.';  
     } else if (error.message?.includes('429')) {  
+      console.error('⏳ 429 Too Many Requests: Rate limit exceeded');
       errorMessage = req.body.language === 'zh'  
-        ? '请求过于频繁，请稍后重试。'  
-        : 'Too many requests. Please try again later.';  
-    }  
+        ? '请求过于频繁 (429)。请稍后重试。'  
+        : 'Too many requests (429). Please try again later.';  
+    } else if (error.message?.includes('503') || error.message?.includes('504')) {
+        console.error('⏱️ 503/504 Timeout: Model took too long');
+        errorMessage = req.body.language === 'zh'
+        ? '服务器处理超时，Gemini Pro 需要更多时间思考，请重试。'
+        : 'Service timed out. Gemini Pro needs more time to think.';
+    }
     
-    res.status(500).json({ error: errorMessage });  
+    res.status(500).json({ error: errorMessage, debug: error.message });  
   }  
 });  
 
@@ -224,7 +246,19 @@ app.get('*', (req, res) => {
 });  
 
 app.listen(PORT, () => {  
-  console.log(`🚀 Server running on port ${PORT}`);  
-  console.log(`📱 Frontend: http://localhost:${PORT}`);  
-  console.log(`🔌 API: http://localhost:${PORT}/api/analyze`);  
+  console.log(`🚀 Server running on port ${PORT}`);
+  
+  // STARTUP CHECK for API KEY
+  const key = process.env.API_KEY;
+  if (!key) {
+    console.error("_________________________________________________________________");
+    console.error("❌ CRITICAL: API_KEY environment variable is NOT SET.");
+    console.error("   Please go to Zeabur -> Settings -> Variables and add API_KEY.");
+    console.error("_________________________________________________________________");
+  } else {
+    console.log("_________________________________________________________________");
+    console.log(`✅ Startup Check: API_KEY is set (Length: ${key.length} chars).`);
+    console.log(`   Server is ready to accept requests.`);
+    console.log("_________________________________________________________________");
+  }
 });
