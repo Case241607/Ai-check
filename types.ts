@@ -5,7 +5,7 @@ export interface AuditItem {
 }
 
 export interface AuditReport {
-  audit_perspective?: string; // New field for the lens used
+  audit_perspective?: string;
   critical_issues: AuditItem[];
   improvement_suggestions: AuditItem[];
   positive_elements: AuditItem[];
@@ -14,9 +14,9 @@ export interface AuditReport {
 export interface HistoryItem {
   id: string;
   timestamp: number;
-  imagePreview: string; // Data URL for the image
+  thumbnail: string; // Small low-res base64 for sidebar list (LocalStorage)
   report: AuditReport;
-  category?: string; // Store the category used for this audit
+  category?: string;
 }
 
 export enum AuditType {

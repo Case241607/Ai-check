@@ -2,9 +2,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { analyzeUI } from './services/geminiService';
 import { AuditReport, AuditType, HistoryItem } from './types';
-import { fileToBase64 } from './utils/imageUtils';
+import { fileToBase64, createThumbnail } from './utils/imageUtils';
+import { saveImageToDB, getImageFromDB, clearImageDB, deleteImageFromDB } from './utils/db';
 import AuditCard from './components/AuditCard';
-import DonateModal from './components/DonateModal'; // Import the new modal
+import DonateModal from './components/DonateModal';
 import { DESIGN_CATEGORIES, TRANSLATIONS, Language } from './constants';
 
 // Skeleton Component for loading state
@@ -81,7 +82,7 @@ const App: React.FC = () => {
   // Language & UI State
   const [currentLang, setCurrentLang] = useState<Language>('zh');
   const [isHelpOpen, setIsHelpOpen] = useState(false);
-  const [isDonateOpen, setIsDonateOpen] = useState(false); // Donate Modal State
+  const [isDonateOpen, setIsDonateOpen] = useState(false);
   const [isLangMenuOpen, setIsLangMenuOpen] = useState(false);
 
   // Helper for translations
@@ -97,7 +98,6 @@ const App: React.FC = () => {
     return 'light';
   });
 
-  // Apply Theme
   useEffect(() => {
     const root = window.document.documentElement;
     if (theme === 'dark') {
@@ -112,35 +112,34 @@ const App: React.FC = () => {
     setTheme(prev => prev === 'light' ? 'dark' : 'light');
   };
 
-  // Load history on mount
+  // --- PERSISTENCE LOGIC START ---
+
+  // Load history metadata from LocalStorage on mount
   useEffect(() => {
     try {
-      const saved = localStorage.getItem('audit_history');
+      const saved = localStorage.getItem('audit_history_meta');
       if (saved) {
         setHistory(JSON.parse(saved));
       }
     } catch (e) {
-      console.error("Failed to load history", e);
+      console.error("Failed to load history metadata", e);
     }
   }, []);
 
-  // Save history on change with quota handling
+  // Save history to LocalStorage whenever it changes
   useEffect(() => {
     const saveToStorage = (items: HistoryItem[]) => {
       try {
-        localStorage.setItem('audit_history', JSON.stringify(items));
+        // We only store the list with thumbnails in LocalStorage
+        localStorage.setItem('audit_history_meta', JSON.stringify(items));
       } catch (e) {
-        // If quota exceeded, try removing the oldest item (last in array) and retry
-        if (items.length > 0) {
-           console.warn("Storage quota exceeded, trimming history to fit...");
-           saveToStorage(items.slice(0, items.length - 1));
-        } else {
-           console.error("Failed to save history: Storage full.");
-        }
+        console.error("LocalStorage quota exceeded", e);
       }
     };
     saveToStorage(history);
   }, [history]);
+
+  // --- PERSISTENCE LOGIC END ---
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -153,6 +152,8 @@ const App: React.FC = () => {
       processFile(file, previewUrl);
     };
     reader.readAsDataURL(file);
+    // Reset input so same file can be selected again
+    event.target.value = '';
   };
 
   const processFile = async (file: File, previewUrl: string) => {
@@ -163,24 +164,44 @@ const App: React.FC = () => {
     if (window.innerWidth < 1024) setIsSidebarOpen(false);
 
     try {
+      // 1. Convert file to Base64 for API
       const base64Data = await fileToBase64(file);
-      // Pass selectedCategory and currentLang to the analysis service
+      
+      // 2. Call Gemini API
       const auditResult = await analyzeUI(base64Data, file.type, selectedCategory, currentLang);
       
+      // 3. Create a unique ID
+      const newId = Date.now().toString();
+      
+      // 4. Generate a small thumbnail for the sidebar (saves LocalStorage space)
+      const thumbnailUrl = await createThumbnail(previewUrl, 80);
+
+      // 5. Save the FULL image to IndexedDB (for reloading later)
+      // Note: We remove the 'data:image/png;base64,' prefix inside saveImageToDB if passed raw, 
+      // but here we pass the base64Data which is already clean from fileToBase64
+      // We'll store it with prefix to make retrieval easier for <img src>
+      await saveImageToDB(newId, previewUrl);
+
       setReport(auditResult);
       
       const newItem: HistoryItem = {
-        id: Date.now().toString(),
+        id: newId,
         timestamp: Date.now(),
-        imagePreview: previewUrl,
+        thumbnail: thumbnailUrl, // Only store the tiny thumbnail in state/LS
         report: auditResult,
         category: selectedCategory
       };
 
       setHistory(prev => {
         const updated = [newItem, ...prev];
-        // Limit to 5 items to prevent LocalStorage quota exceeded errors
-        return updated.slice(0, 5); 
+        // Keep last 20 items in metadata
+        if (updated.length > 20) {
+           // Cleanup old images from IndexedDB
+           const toRemove = updated.slice(20);
+           toRemove.forEach(item => deleteImageFromDB(item.id));
+           return updated.slice(0, 20);
+        }
+        return updated;
       });
       setSelectedHistoryId(newItem.id);
 
@@ -191,17 +212,36 @@ const App: React.FC = () => {
     }
   };
 
-  const loadHistoryItem = (item: HistoryItem) => {
-    setImagePreview(item.imagePreview);
-    setReport(item.report);
+  const loadHistoryItem = async (item: HistoryItem) => {
     setSelectedHistoryId(item.id);
+    setLoading(true); // Show loading while fetching image from DB
+    setError(null);
+
+    // Set report immediately from metadata
+    setReport(item.report);
     if (item.category) {
       setSelectedCategory(item.category);
     }
-    setError(null);
-    setLoading(false);
-    if (window.innerWidth < 1024) {
-      setIsSidebarOpen(false);
+
+    try {
+      // Fetch full res image from IndexedDB
+      const fullImage = await getImageFromDB(item.id);
+      
+      if (fullImage) {
+        setImagePreview(fullImage);
+      } else {
+        // Fallback to thumbnail if full image is missing/cleared
+        setImagePreview(item.thumbnail);
+        setError("Original image not found in cache. Showing thumbnail.");
+      }
+    } catch (e) {
+      console.error("Error loading image from DB", e);
+      setImagePreview(item.thumbnail);
+    } finally {
+      setLoading(false);
+      if (window.innerWidth < 1024) {
+        setIsSidebarOpen(false);
+      }
     }
   };
 
@@ -210,7 +250,6 @@ const App: React.FC = () => {
     setReport(null);
     setError(null);
     setSelectedHistoryId(null);
-    // Do not reset category, let user keep their selection
     triggerFileInput();
   };
 
@@ -227,7 +266,6 @@ const App: React.FC = () => {
     });
   };
 
-  // Get current category label safely
   const currentCategoryLabel = (t[DESIGN_CATEGORIES.find(c => c.id === selectedCategory)?.labelKey as keyof typeof t] || selectedCategory) as string;
 
   return (
@@ -302,7 +340,7 @@ const App: React.FC = () => {
                   }`}
                 >
                   <div className="w-12 h-12 rounded-lg bg-slate-200 dark:bg-slate-700 overflow-hidden shrink-0 border border-slate-200 dark:border-slate-600 relative">
-                    <img src={item.imagePreview} alt="Thumbnail" className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
+                    <img src={item.thumbnail} alt="Thumbnail" className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
                     {item.category && (
                       <div className="absolute bottom-0 right-0 bg-black/60 text-white text-[8px] px-1 py-0.5 rounded-tl-md">
                         {DESIGN_CATEGORIES.find(c => c.id === item.category)?.icon || '📄'}
@@ -332,10 +370,11 @@ const App: React.FC = () => {
         <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50">
            {history.length > 0 && (
             <button 
-              onClick={() => {
+              onClick={async () => {
                 if(window.confirm(t.clear_history_confirm)) {
                   setHistory([]);
-                  localStorage.removeItem('audit_history');
+                  localStorage.removeItem('audit_history_meta');
+                  await clearImageDB(); // Clear IndexedDB as well
                   startNewAudit();
                 }
               }}
@@ -350,7 +389,7 @@ const App: React.FC = () => {
 
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col h-full min-w-0 relative">
-        {/* Top Header (Mobile & Desktop) */}
+        {/* Top Header */}
         <header className="h-16 shrink-0 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-4 lg:px-8 z-20">
           <div className="flex items-center gap-3 lg:hidden">
             <button 
@@ -374,13 +413,11 @@ const App: React.FC = () => {
 
           <div className="flex items-center gap-2">
             
-            {/* Donate Button */}
             <button 
               onClick={() => setIsDonateOpen(true)}
               className="p-2 lg:px-3 text-slate-500 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors flex items-center gap-1.5"
               title={t.support_us}
             >
-              {/* Gift Icon */}
               <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7" />
               </svg>
