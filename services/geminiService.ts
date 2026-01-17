@@ -4,7 +4,17 @@ import { AuditReport } from "../types";
 
 export const analyzeUI = async (imageBase64: string, mimeType: string, category: string, language: string): Promise<AuditReport> => {
   // @ts-ignore
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = process.env.API_KEY;
+
+  if (!apiKey || apiKey.length === 0 || apiKey.includes("API_KEY")) {
+    throw new Error(
+      language === 'zh'
+        ? "未检测到 API Key。请在 Zeabur 环境变量中设置 'API_KEY' 并重新部署。"
+        : "API Key not found. Please set 'API_KEY' in your environment variables and redeploy."
+    );
+  }
+
+  const ai = new GoogleGenAI({ apiKey: apiKey });
   
   // Map language codes to human-readable names for the AI prompt
   const langMap: Record<string, string> = {
